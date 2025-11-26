@@ -150,7 +150,6 @@ onInstall:
 
             - type: radio-fieldset
               name: mode
-              default: anonymizer
               values:
                 - caption: Secure Internet Access
                   value: anonymizer
@@ -202,7 +201,6 @@ onInstall:
                   rpm -q --queryformat '%{VERSION}' centos-release | yum -y install https://as-repository.openvpn.net/as-repo-centos$(cat).rpm
                   yum -y install centos-release-scl-rh
                   yum -y install openvpn-as dnsmasq
-                  systemctl enable dnsmasq.service --now
             - elif (/almalinux/.test("${nodes.cp.nodeType}")):
               - setGlobals:
                   iptables: nftables
@@ -210,12 +208,17 @@ onInstall:
               - cmd [cp]: |-
                   rpm -q --queryformat '%{VERSION}' almalinux-release | cut -d. -f1 | dnf -y install https://as-repository.openvpn.net/as-repo-rhel$(cat).rpm
                   dnf -y install openvpn-as dnsmasq python3-setuptools python3-idna
-                  systemctl enable dnsmasq.service --now
             - else:
                 return:
                   type: warning
                   message: Unsupported operating system. Only AlmaLinux and CentOS are supported.
-                
+            - cmd [cp]: |-
+                grep -q ^interface /etc/dnsmasq.conf && sed -i 's/^interface=.*/interface=as0t0/' /etc/dnsmasq.conf || echo 'interface=as0t0' >>/etc/dnsmasq.conf
+                grep -q ^bind-interfaces /etc/dnsmasq.conf && sed -i 's/^bind-interfaces/#bind-interfaces/' /etc/dnsmasq.conf
+                grep -q ^bind-dynamic /etc/dnsmasq.conf || echo bind-dynamic >>/etc/dnsmasq.conf
+                systemctl enable dnsmasq.service
+                systemctl reload-or-restart dnsmasq.service
+
             - cmd [cp]: |-
                 cd ${globals.ovpn}
                 ./confdba --mod --key=iptables.vpn.disable.filter --value=True --prof=Default
@@ -239,6 +242,11 @@ onInstall:
                 do
                   ./sacli --key "vpn.server.routing.private_network.$i" --value "${AR[$i]}" ConfigPut;
                 done
+            - if (/almalinux/.test("${nodes.cp.nodeType}")):
+              - cmd [cp]: |-
+                  cd ${globals.ovpn}
+                  ./sacli --key xtables --value nftables ConfigPut
+                  ln -sf /usr/sbin/xtables-legacy-multi /usr/sbin/iptables
 
           setupMode:
             - if (!"${this.extIp:}"):
@@ -257,9 +265,10 @@ onInstall:
             - else:
                 - cmd [cp]: |-
                     cd ${globals.ovpn}
+                    ASO_IP=$(ip -4 addr show as0t0 | grep -o 'inet [0-9.]*' | cut -d' ' -f2)
                     ./sacli --key "vpn.server.routing.private_access" --value "nat" ConfigPut
-                    ./sacli --key "vpn.server.dhcp_option.dns.0" --value "${this.extIp}" ConfigPut
-                    ./sacli --key "vpn.server.dhcp_option.dns.1" --value "8.8.8.8" ConfigPut
+                    ./sacli --key "vpn.server.dhcp_option.dns.0" --value "$ASO_IP" ConfigPut
+                    ./sacli --key vpn.server.dhcp_option.dns.1 ConfigDel
                     service openvpnas restart
                 - setupFirewall:
                     ip: ${this.extIp}
@@ -298,9 +307,8 @@ onInstall:
             - if (/almalinux/.test("${nodes.cp.nodeType}")):
               - cmd [cp]:
                   echo '${response.body}' >> ${globals.iptablesCustom};
-                  nft -f ${globals.iptablesCustom}
             - cmd [cp]:
-                jem firewall enable;
+                jem firewall enable
                 jem firewall start;
 
           resetPassword:
