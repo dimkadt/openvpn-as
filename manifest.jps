@@ -206,6 +206,8 @@ onInstall:
                   iptables: nftables
                   iptablesCustom: /etc/nftables/container-defined.nft
               - cmd [cp]: |-
+                  mkdir -p /etc//systemd/system/openvpnas.service.d/
+                  echo -e "[Service]\nExecStartPost=/bin/bash -c 'r=0;while [ \$r -le 10 ]; do ps axuf | grep -v grep | grep -q iptworker && break || sleep 1;echo \$r; let r+=1; done; /usr/bin/jem firewall start'" > /etc/systemd/system/openvpnas.service.d/override.conf
                   rpm -q --queryformat '%{VERSION}' almalinux-release | cut -d. -f1 | dnf -y install https://as-repository.openvpn.net/as-repo-rhel$(cat).rpm
                   dnf -y install openvpn-as dnsmasq python3-setuptools python3-idna
             - else:
@@ -258,18 +260,20 @@ onInstall:
                     ./sacli --key "vpn.server.routing.private_access" --value "no" ConfigPut
                     ./sacli --key "vpn.server.dhcp_option.dns.0" --value "8.8.8.8" ConfigPut
                     ./sacli --key "vpn.server.dhcp_option.dns.1" --value "8.8.4.4" ConfigPut
-                    service openvpnas restart
+                    systemctl restart openvpnas
                 - setupFirewall:
                     ip: ${this.extIp}
                     privateNetworks: ''
             - else:
                 - cmd [cp]: |-
+                    systemctl is-active openvpnas || systemctl restart openvpnas
                     cd ${globals.ovpn}
+                    while true; do ip a | grep -q as0t0 && break; sleep 1; done
                     ASO_IP=$(ip -4 addr show as0t0 | grep -o 'inet [0-9.]*' | cut -d' ' -f2)
                     ./sacli --key "vpn.server.routing.private_access" --value "nat" ConfigPut
                     ./sacli --key "vpn.server.dhcp_option.dns.0" --value "$ASO_IP" ConfigPut
                     ./sacli --key vpn.server.dhcp_option.dns.1 ConfigDel
-                    service openvpnas restart
+                    systemctl restart openvpnas
                 - setupFirewall:
                     ip: ${this.extIp}
                     privateNetworks: ${globals.privateNetworks}
@@ -282,7 +286,7 @@ onInstall:
 
           checkTunDevice:
             cmd [cp]: |-
-              modprobe tun;
+              modprobe tun 2>&1;
               createTunDev='[ ! -e /dev/net/tun ] && mkdir -p /dev/net && mknod /dev/net/tun c 10 200 && chmod 0666 /dev/net/tun';
               eval $createTunDev && echo "$createTunDev # create TUN device" >> /etc/rc.d/rc.local;
               exit 0;
@@ -308,7 +312,7 @@ onInstall:
               - cmd [cp]:
                   echo '${response.body}' >> ${globals.iptablesCustom};
             - cmd [cp]:
-                jem firewall enable
+                jem firewall enable;
                 jem firewall start;
 
           resetPassword:
@@ -335,13 +339,15 @@ onInstall:
                 ${globals.ovpn}/sacli --key "cs.priv_key"  --value_file "/var/lib/jelastic/keys/privkey.pem" ConfigPut\n
                 ${globals.ovpn}/sacli --key "cs.cert"      --value_file "/var/lib/jelastic/keys/cert.pem" ConfigPut\n
                 ${globals.ovpn}/sacli --key "cs.ca_bundle" --value_file "/var/lib/jelastic/keys/fullchain.pem" ConfigPut\n
-                ${globals.ovpn}/sacli start' > ${globals.letsEncryptDeployHook};
+                ${globals.ovpn}/sacli start\n
+                jem firewall start' > ${globals.letsEncryptDeployHook};
                 mkdir -p $(dirname ${globals.letsEncryptUndeployHook});
                 printf '#!/bin/bash\n
                 ${globals.ovpn}/sacli --key "cs.priv_key" ConfigDel\n
                 ${globals.ovpn}/sacli --key "cs.ca_bundle" ConfigDel\n
                 ${globals.ovpn}/sacli --key "cs.cert" ConfigDel\n
-                ${globals.ovpn}/sacli start' > ${globals.letsEncryptUndeployHook};
+                ${globals.ovpn}/sacli start\n
+                jem firewall start' > ${globals.letsEncryptUndeployHook};
 
             - install:
                 jps: https://raw.githubusercontent.com/jelastic-jps/lets-encrypt/master/manifest.jps?_r=${fn.random}
