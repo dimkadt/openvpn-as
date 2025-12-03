@@ -207,9 +207,10 @@ onInstall:
                   iptablesCustom: /etc/nftables/container-defined.nft
               - cmd [cp]: |-
                   mkdir -p /etc//systemd/system/openvpnas.service.d/
-                  echo -e "[Service]\nExecStartPost=/bin/bash -c 'r=0;while [ \$r -le 10 ]; do ps axuf | grep -v grep | grep -q iptworker && break || sleep 1;echo \$r; let r+=1; done; /usr/bin/jem firewall start'" > /etc/systemd/system/openvpnas.service.d/override.conf
+                  echo -e "[Service]\nExecStartPost=/bin/bash -c 'r=0;while [ \$r -le 10 ]; do ps axuf | grep -v grep | grep -q iptworker && break || sleep 1; let r+=1; done; /usr/bin/jem firewall start'" > /etc/systemd/system/openvpnas.service.d/override.conf
                   rpm -q --queryformat '%{VERSION}' almalinux-release | cut -d. -f1 | dnf -y install https://as-repository.openvpn.net/as-repo-rhel$(cat).rpm
                   dnf -y install openvpn-as dnsmasq python3-setuptools python3-idna
+                  ln -sf /usr/sbin/xtables-legacy-multi /usr/sbin/iptables
             - else:
                 return:
                   type: warning
@@ -248,7 +249,6 @@ onInstall:
               - cmd [cp]: |-
                   cd ${globals.ovpn}
                   ./sacli --key xtables --value nftables ConfigPut
-                  ln -sf /usr/sbin/xtables-legacy-multi /usr/sbin/iptables
 
           setupMode:
             - if (!"${this.extIp:}"):
@@ -266,9 +266,10 @@ onInstall:
                     privateNetworks: ''
             - else:
                 - cmd [cp]: |-
-                    systemctl is-active openvpnas || systemctl restart openvpnas
+                    ip a | grep as0t0 || systemctl restart openvpnas
                     cd ${globals.ovpn}
-                    while true; do ip a | grep -q as0t0 && break; sleep 1; done
+                    i=0
+                    while [ $i -le 120 ] ; do ip a | grep -q as0t0 && break; sleep 1;let i+=1; done
                     ASO_IP=$(ip -4 addr show as0t0 | grep -o 'inet [0-9.]*' | cut -d' ' -f2)
                     ./sacli --key "vpn.server.routing.private_access" --value "nat" ConfigPut
                     ./sacli --key "vpn.server.dhcp_option.dns.0" --value "$ASO_IP" ConfigPut
